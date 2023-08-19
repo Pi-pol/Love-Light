@@ -1,113 +1,158 @@
-#include <ESP8266WiFi.h>
-#include <FirebaseESP8266.h>
-#include <FirebaseJson.h>
+#include <Arduino.h>
+#include <WiFi.h>
 #include <FastLED.h>
+#include <Firebase_ESP_Client.h>
+#include "secrets.h" // Has api key and database url
+// Upload: C:\Users\micha\.platformio\penv\Scripts\platformio.exe run --target upload
+// Monitor: C:\Users\micha\.platformio\penv\Scripts\platformio.exe device monitor
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
 
-#define FIREBASE_HOST "your-firebase-url.firebaseio.com"
-#define FIREBASE_AUTH "your-firebase-auth-token"
-#define WIFI_SSID "your-wifi-ssid"
-#define WIFI_PASSWORD "your-wifi-password"
-
-#define POTENTIOMETER_PIN A0
-#define NUM_LEDS 1 // Adjust this based on your LED setup
-
-const int THRESHOLD = 2; // Adjust this threshold as needed
-
-int previousValue = 0;
-int currentValue = 0;
-
+#define POTENTIOMETER_PIN 35
+#define POTENTIOMETER_PIN2 34
+// leds
+#define LED_PIN 21
+#define NUM_LEDS 20
+uint8_t Brightness = 0;
+#define LED_TYPE WS2811
+#define COLOR_ORDER GRB
 CRGB leds[NUM_LEDS];
+#define UPDATES_PER_SECOND 100
+CRGBPalette16 currentPalette;
+TBlendType currentBlending;
 
-FirebaseData firebaseData;
+extern CRGBPalette16 myRedWhiteBluePalette;
+extern const TProgmemPalette16 myRedWhiteBluePalette_p PROGMEM;
+// leds
+int intValue = 0;
+const int THRESHOLD = 10; // Adjust this threshold as needed
 
+int previousValue = 30;
+int currentValue = 0;
+unsigned long sendDataPrevMillis = 0;
+int count = 0;
+bool signupOK = false;
 void setup()
 {
+  pinMode(5, INPUT);
+  pinMode(15, INPUT);
   Serial.begin(115200);
-
-  pinMode(POTENTIOMETER_PIN, INPUT);
-  currentValue = analogRead(POTENTIOMETER_PIN);
-  previousValue = currentValue;
-
-  FastLED.addLeds<WS2812, D3, GRB>(leds, NUM_LEDS); // Define your LED setup
-
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
   while (WiFi.status() != WL_CONNECTED)
   {
-    delay(1000);
-    Serial.println("Connecting to WiFi...");
+    Serial.print(".");
+    delay(300);
   }
-
-  Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
-
-  Serial.println("Setup complete.");
-}
-
-void loop()
-{
-  currentValue = analogRead(POTENTIOMETER_PIN);
-
-  if (abs(currentValue - previousValue) >= THRESHOLD)
+  Serial.println();
+  Serial.print("Connected with IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println();
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+  if (Firebase.signUp(&config, &auth, "", ""))
   {
-    Serial.print("Potentiometer value changed: ");
-    Serial.println(currentValue);
-
-    updateFirebase(currentValue);
-    updateLampColor(currentValue);
-
-    previousValue = currentValue;
+    Serial.println("Firebase ok!");
+    signupOK = true;
   }
   else
   {
-    updateLampColorFromDatabase();
+    Serial.printf("%s\n", config.signer.signupError.message.c_str());
   }
+  // leds
+  FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
 
-  delay(100); // Adjust the delay as needed
+  // leds
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
 }
 
 void updateFirebase(int value)
 {
-  if (Firebase.setString(firebaseData, "/lamp/colorHSL", "120,255,128"))
+  sendDataPrevMillis = millis();
+  // Write an Int number on the database path test/int
+  if (Firebase.RTDB.setInt(&fbdo, "lamps/hue", value))
   {
-    Serial.println("Firebase update successful!");
+    Serial.println("PASSED");
   }
   else
   {
-    Serial.println("Firebase update failed.");
-    Serial.println("Reason: " + firebaseData.errorReason());
+    Serial.println("FAILED");
   }
 }
 
 void updateLampColor(int value)
 {
-  // Calculate hue from value
-  int hue = map(value, 0, 1023, 0, 255);
-
-  // Set LED color based on calculated hue
-  fill_solid(leds, NUM_LEDS, CHSV(hue, 255, 255));
-  FastLED.show();
+  // sth sth fastledrandombulshitgo ->number in the database is already in hue
 }
 
-void updateLampColorFromDatabase()
+int updateLampColorFromDatabase()
 {
-  if (Firebase.getString(firebaseData, "/lamp/colorHSL"))
+  if (Firebase.RTDB.getInt(&fbdo, "/lamps/hue"))
   {
-    String hslString = firebaseData.stringData();
-    Serial.print("HSL color from Firebase: ");
-    Serial.println(hslString);
-
-    int hue, saturation, lightness;
-    sscanf(hslString.c_str(), "%d,%d,%d", &hue, &saturation, &lightness);
-
-    // Convert HSL to RGB using FastLED
-    CRGB rgbColor = CHSV(hue, saturation, lightness);
-
-    // Set the LED color
-    leds[0] = rgbColor;
-    FastLED.show();
+    Serial.print("Hue Value: ");
+    Serial.println(fbdo.dataPath());
+    Serial.print("Hue type: ");
+    Serial.println(fbdo.dataType());
+    Serial.print("Hue value: ");
+    Serial.println(fbdo.intData());
+    if (fbdo.dataType() == "int")
+    {
+      intValue = fbdo.intData();
+      Serial.println(intValue);
+      for (size_t i = 0; i < 20; i++)
+      {
+        leds[i] = CHSV(intValue, 255, 128);
+      }
+      return intValue;
+    }
   }
   else
   {
-    Serial.println("Failed to get HSL color from Firebase.");
-    Serial.println("Reason: " + firebaseData.errorReason());
+    Serial.println(fbdo.errorReason());
   }
+  return 0;
+}
+uint8_t h;
+bool shouldUpdateDB = false;
+void loop()
+{
+  for (int i = 0; i < 20; i++)
+  {
+    leds[i] = CHSV(h, 255, 255);
+  }
+  FastLED.show();
+  currentValue = analogRead(POTENTIOMETER_PIN);
+  // Serial.println(currentValue);
+  uint8_t value = 0;
+  if (abs(currentValue - previousValue) >= THRESHOLD)
+  {
+    Serial.print("Potentiometer value changed: ");
+    value = map(currentValue, 0, 4096, 0, 255);
+    Serial.println(value);
+    previousValue = currentValue;
+    h = value;
+    shouldUpdateDB = true;
+  }
+  if (Firebase.ready() && signupOK && (millis() - sendDataPrevMillis > 5000 || sendDataPrevMillis == 0))
+  {
+    sendDataPrevMillis = millis();
+
+    if (shouldUpdateDB)
+    {
+      Serial.println(value);
+
+      updateFirebase(value);
+      updateLampColor(value);
+
+      previousValue = currentValue;
+      shouldUpdateDB = false;
+    }
+    else
+    {
+      h = updateLampColorFromDatabase();
+    }
+  }
+  delay(20); // Adjust the delay as needed
 }
