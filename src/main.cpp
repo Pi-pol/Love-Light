@@ -35,6 +35,9 @@ int count = 0;
 bool signupOK = false;
 void setup()
 {
+    // leds
+  FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+  bool shouldBlink = true;
   pinMode(5, INPUT);
   pinMode(15, INPUT);
   Serial.begin(115200);
@@ -42,6 +45,9 @@ void setup()
   Serial.print("Connecting to Wi-Fi");
   while (WiFi.status() != WL_CONNECTED)
   {
+    leds[0] = CHSV(60, 255, 255*shouldBlink);
+    FastLED.show();
+    shouldBlink = !shouldBlink;
     Serial.print(".");
     delay(300);
   }
@@ -60,8 +66,6 @@ void setup()
   {
     Serial.printf("%s\n", config.signer.signupError.message.c_str());
   }
-  // leds
-  FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
 
   // leds
   Firebase.begin(&config, &auth);
